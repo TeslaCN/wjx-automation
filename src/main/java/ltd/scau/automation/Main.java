@@ -29,10 +29,15 @@ public class Main {
 
     private static final Pattern CODE_PATTERN = Pattern.compile("https://www\\.wjx\\.cn/m/(\\d+)\\.aspx");
 
-    private static final int THREAD_COUNT = 16;
+    private static final int THREAD_COUNT = 12;
 
-        public static final String URL = "https://www.wjx.cn/m/35825251.aspx";
+    private static final int TARGET_COUNT = 220;
+
+    private static final Set<String> set = Collections.synchronizedSet(new HashSet<>());
+
+    //        public static final String URL = "https://www.wjx.cn/m/35825251.aspx";
 //    public static final String URL = "https://www.wjx.cn/m/35859022.aspx";
+    public static final String URL = "https://www.wjx.cn/m/36025830.aspx";
 
     public static void main(String[] args) throws Exception {
         Matcher m = CODE_PATTERN.matcher(URL);
@@ -52,7 +57,15 @@ public class Main {
             Jedis jedis = new Jedis(URI.create("redis://:sudo%20reboot@127.0.0.1:6379/0"));
             Http http = new Http();
             for (; ; ) {
+                Long wjxSuccess = jedis.llen("wjx_success");
+                if (wjxSuccess >= TARGET_COUNT) {
+                    break;
+                }
                 String proxyIp = jedis.brpop(Integer.MAX_VALUE, "proxy_ip").get(1);
+//                if (set.contains(proxyIp)) {
+//                    continue;
+//                }
+                set.add(proxyIp);
                 System.out.println(Thread.currentThread().getName() + " Get proxy: " + proxyIp);
 
                 String[] split = proxyIp.split(":");
@@ -71,6 +84,7 @@ public class Main {
         for (int i = 0; i < THREAD_COUNT; i++) {
             executorService.execute(runnable);
         }
+        executorService.shutdown();
     }
 
     public static boolean startDriver(String proxyIp) {
@@ -83,10 +97,12 @@ public class Main {
             List<Question> questions = fieldElements.stream().map(e -> {
                 Integer topic = Integer.valueOf(e.getAttribute("topic"));
                 Integer minValue = Integer.valueOf(Optional.ofNullable(e.getAttribute("minvalue")).orElse("1"));
+                Integer maxValue = Integer.valueOf(Optional.ofNullable(e.getAttribute("maxvalue")).orElse("0"));
                 QuestionType questionType = QuestionType.byNum(Integer.valueOf(e.getAttribute("type")));
                 return Question.aQuestion()
                         .withTopic(topic)
                         .withMinValue(minValue)
+                        .withMaxValue(maxValue)
                         .withType(questionType)
                         .withRequired("1".equals(e.getAttribute("req")))
                         .withClickableElements(e.findElements(By.tagName("a")))
@@ -145,7 +161,7 @@ public class Main {
                 singleSelect(scores, elements);
                 break;
             case MULTI_SELECT:
-                multiSelect(scores, elements, question.getMinValue());
+                multiSelect(scores, elements, question.getMinValue(), question.getMaxValue());
                 break;
             default:
         }
@@ -156,9 +172,9 @@ public class Main {
         elements.get(highest).click();
     }
 
-    public static void multiSelect(TreeMap<Double, Integer> scores, List<WebElement> elements, Integer minValue) {
+    public static void multiSelect(TreeMap<Double, Integer> scores, List<WebElement> elements, Integer minValue, Integer maxValue) {
         Random random = new Random();
-        int count = random.nextInt(elements.size() - minValue + 1) + minValue;
+        int count = random.nextInt((maxValue == 0 ? elements.size() : maxValue + 1) - minValue) + minValue;
         for (int i = 0; i < count; i++) {
             elements.get(scores.pollLastEntry().getValue()).click();
             randomSleep(250, 250);

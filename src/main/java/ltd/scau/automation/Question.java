@@ -18,6 +18,8 @@ public class Question {
 
     private Integer minValue;
 
+    private Integer maxValue;
+
     private List<WebElement> clickableElements;
 
     @Override
@@ -40,6 +42,7 @@ public class Question {
                 ", required=" + required +
                 ", type=" + type +
                 ", minValue=" + minValue +
+                ", maxValue=" + maxValue +
                 ", clickableElements=" + clickableElements +
                 '}';
     }
@@ -84,6 +87,13 @@ public class Question {
         this.required = required;
     }
 
+    public Integer getMaxValue() {
+        return maxValue;
+    }
+
+    public void setMaxValue(Integer maxValue) {
+        this.maxValue = maxValue;
+    }
 
     public static QuestionBuilder aQuestion() {
         return new QuestionBuilder();
@@ -94,9 +104,14 @@ public class Question {
         private Boolean required;
         private QuestionType type;
         private Integer minValue;
+        private Integer maxValue;
         private List<WebElement> clickableElements;
 
         private QuestionBuilder() {
+        }
+
+        public static QuestionBuilder aQuestion() {
+            return new QuestionBuilder();
         }
 
         public QuestionBuilder withTopic(Integer topic) {
@@ -119,6 +134,11 @@ public class Question {
             return this;
         }
 
+        public QuestionBuilder withMaxValue(Integer maxValue) {
+            this.maxValue = maxValue;
+            return this;
+        }
+
         public QuestionBuilder withClickableElements(List<WebElement> clickableElements) {
             this.clickableElements = clickableElements;
             return this;
@@ -130,6 +150,7 @@ public class Question {
             question.setRequired(required);
             question.setType(type);
             question.setMinValue(minValue);
+            question.setMaxValue(maxValue);
             question.setClickableElements(clickableElements);
             return question;
         }
