@@ -29,15 +29,22 @@ public class Main {
 
     private static final Pattern CODE_PATTERN = Pattern.compile("https://www\\.wjx\\.cn/m/(\\d+)\\.aspx");
 
-    private static final int THREAD_COUNT = 12;
+    private static final int THREAD_COUNT = 8;
 
-    private static final int TARGET_COUNT = 220;
+    private static final int TARGET_COUNT = 50;
 
     private static final Set<String> set = Collections.synchronizedSet(new HashSet<>());
 
+    public static final Boolean HEADLESS = true;
+
+    public static final Boolean USE_PROXY = false;
+
     //        public static final String URL = "https://www.wjx.cn/m/35825251.aspx";
 //    public static final String URL = "https://www.wjx.cn/m/35859022.aspx";
-    public static final String URL = "https://www.wjx.cn/m/36025830.aspx";
+//    public static final String URL = "https://www.wjx.cn/m/36025830.aspx";
+    public static final String URL = "https://www.wjx.cn/m/37426354.aspx";
+
+    private static final String WJX_SUCCESS = "WJX_SUCCESS";
 
     public static void main(String[] args) throws Exception {
         Matcher m = CODE_PATTERN.matcher(URL);
@@ -49,29 +56,30 @@ public class Main {
         }
         parseRules(Main.class.getResource(String.format("/%s.properties", code)).getFile());
 
-        ProxyGetter proxyGetter = new ProxyGetter();
-        Thread t = new Thread(proxyGetter);
-        t.start();
+        if (USE_PROXY) {
+            ProxyGetter proxyGetter = new ProxyGetter();
+            Thread t = new Thread(proxyGetter);
+            t.start();
+        }
 
         Runnable runnable = () -> {
             Jedis jedis = new Jedis(URI.create("redis://:sudo%20reboot@127.0.0.1:6379/0"));
             Http http = new Http();
             for (; ; ) {
-                Long wjxSuccess = jedis.llen("wjx_success");
+                Long wjxSuccess = jedis.llen(WJX_SUCCESS);
                 if (wjxSuccess >= TARGET_COUNT) {
                     break;
                 }
-                String proxyIp = jedis.brpop(Integer.MAX_VALUE, "proxy_ip").get(1);
+                String proxyIp = USE_PROXY ? jedis.brpop(Integer.MAX_VALUE, "proxy_ip").get(1) : null;
 //                if (set.contains(proxyIp)) {
 //                    continue;
 //                }
-                set.add(proxyIp);
+//                set.add(proxyIp);
                 System.out.println(Thread.currentThread().getName() + " Get proxy: " + proxyIp);
 
-                String[] split = proxyIp.split(":");
                 try {
                     if (startDriver(proxyIp)) {
-                        jedis.rpush("wjx_success", proxyIp);
+                        jedis.rpush(WJX_SUCCESS, Optional.ofNullable(proxyIp).orElse("null"));
                     }
                 } catch (Exception e) {
                     System.err.println("Drop: " + proxyIp);
@@ -90,24 +98,10 @@ public class Main {
     public static boolean startDriver(String proxyIp) {
         ChromeDriver driver = null;
         try {
-            driver = getChromeDriver(proxyIp);
+            driver = proxyIp != null ? getChromeDriverWithProxy(proxyIp) : getChromeDriver();
             driver.get(URL);
 
-            List<WebElement> fieldElements = driver.findElementsByClassName("field");
-            List<Question> questions = fieldElements.stream().map(e -> {
-                Integer topic = Integer.valueOf(e.getAttribute("topic"));
-                Integer minValue = Integer.valueOf(Optional.ofNullable(e.getAttribute("minvalue")).orElse("1"));
-                Integer maxValue = Integer.valueOf(Optional.ofNullable(e.getAttribute("maxvalue")).orElse("0"));
-                QuestionType questionType = QuestionType.byNum(Integer.valueOf(e.getAttribute("type")));
-                return Question.aQuestion()
-                        .withTopic(topic)
-                        .withMinValue(minValue)
-                        .withMaxValue(maxValue)
-                        .withType(questionType)
-                        .withRequired("1".equals(e.getAttribute("req")))
-                        .withClickableElements(e.findElements(By.tagName("a")))
-                        .build();
-            }).collect(Collectors.toList());
+            List<Question> questions = getQuestions(driver);
 
             questions.forEach(Main::click);
 
@@ -119,8 +113,42 @@ public class Main {
         }
     }
 
-    public static ChromeDriver getChromeDriver(String proxyIp) {
+    public static List<Question> getQuestions(ChromeDriver driver) {
+        List<WebElement> fieldElements = driver.findElementsByClassName("field");
+        return fieldElements.stream().map(e -> {
+            Integer topic = Integer.valueOf(e.getAttribute("topic"));
+            Integer minValue = Integer.valueOf(Optional.ofNullable(e.getAttribute("minvalue")).orElse("1"));
+            Integer maxValue = Integer.valueOf(Optional.ofNullable(e.getAttribute("maxvalue")).orElse("0"));
+            QuestionType questionType = QuestionType.byNum(Integer.valueOf(e.getAttribute("type")));
+            return Question.aQuestion()
+                    .withTopic(topic)
+                    .withMinValue(minValue)
+                    .withMaxValue(maxValue)
+                    .withType(questionType)
+                    .withRequired("1".equals(e.getAttribute("req")))
+                    .withClickableElements(e.findElements(By.tagName("a")))
+                    .build();
+        }).collect(Collectors.toList());
+    }
+
+    public static ChromeDriver getChromeDriver() {
         ChromeOptions chromeOptions = new ChromeOptions();
+        if (HEADLESS) {
+            chromeOptions.addArguments("headless");
+        }
+        chromeOptions.setCapability(CapabilityType.ForSeleniumServer.AVOIDING_PROXY, true);
+        chromeOptions.setCapability(CapabilityType.ForSeleniumServer.ONLY_PROXYING_SELENIUM_TRAFFIC, true);
+        ChromeDriver chromeDriver = new ChromeDriver(chromeOptions);
+        chromeDriver.manage().timeouts().pageLoadTimeout(20, TimeUnit.SECONDS);
+        chromeDriver.manage().timeouts().implicitlyWait(5, TimeUnit.SECONDS);
+        return chromeDriver;
+    }
+
+    public static ChromeDriver getChromeDriverWithProxy(String proxyIp) {
+        ChromeOptions chromeOptions = new ChromeOptions();
+        if (HEADLESS) {
+            chromeOptions.addArguments("headless");
+        }
         Proxy proxy = new Proxy().setHttpProxy(proxyIp).setSslProxy(proxyIp);
         chromeOptions.setCapability(CapabilityType.ForSeleniumServer.AVOIDING_PROXY, true);
         chromeOptions.setCapability(CapabilityType.ForSeleniumServer.ONLY_PROXYING_SELENIUM_TRAFFIC, true);
@@ -150,8 +178,11 @@ public class Main {
         Map<Integer, Double> topicRules = rules.getOrDefault(question.getTopic(), Collections.emptyMap());
         TreeMap<Double, Integer> scores = new TreeMap<>();
         List<WebElement> elements = question.getClickableElements();
+        Double total = 0.0;
         for (int i = 0; i < elements.size(); i++) {
-            scores.putIfAbsent(topicRules.getOrDefault(i, 1.0) * Math.random(), i);
+            Double rate = topicRules.getOrDefault(i, 1.0);
+            total += rate;
+            scores.putIfAbsent(rate * Math.random(), i);
         }
         randomSleep(1000, 500);
         switch (question.getType()) {
@@ -161,7 +192,7 @@ public class Main {
                 singleSelect(scores, elements);
                 break;
             case MULTI_SELECT:
-                multiSelect(scores, elements, question.getMinValue(), question.getMaxValue());
+                multiSelect(scores, elements, question.getMinValue(), question.getMaxValue(), total);
                 break;
             default:
         }
@@ -172,11 +203,18 @@ public class Main {
         elements.get(highest).click();
     }
 
-    public static void multiSelect(TreeMap<Double, Integer> scores, List<WebElement> elements, Integer minValue, Integer maxValue) {
-        Random random = new Random();
-        int count = random.nextInt((maxValue == 0 ? elements.size() : maxValue + 1) - minValue) + minValue;
+    public static void multiSelect(TreeMap<Double, Integer> scores, List<WebElement> elements, Integer minValue, Integer maxValue, Double total) {
+        TreeMap<Double, Integer> counts = new TreeMap<>();
+        int recommendCount = (int) Math.round(total / 100);
+        for (int i = minValue; i < (maxValue == 0 ? elements.size() : maxValue + 1); i++) {
+            counts.putIfAbsent(i == recommendCount ? Math.random() * elements.size() : Math.random(), i);
+        }
+        int count = counts.pollLastEntry().getValue();
         for (int i = 0; i < count; i++) {
-            elements.get(scores.pollLastEntry().getValue()).click();
+            Map.Entry<Double, Integer> score = scores.pollLastEntry();
+            if (score.getKey() > 0) {
+                elements.get(score.getValue()).click();
+            }
             randomSleep(250, 250);
         }
     }
